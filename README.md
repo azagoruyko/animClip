@@ -1,15 +1,14 @@
-# Anim Clip
-Save animation to JSON and load it.
+## Basics
+AnimClip is a plugin for Maya that helps to work with animation data. Clips can be either animation curves or snapshot of attribute values (static pose clips). Data is stored in json format.
 
 ## Installation
-Compile with Visual Studio and CMake.<br>
-Load the plugin in Maya.
+Compile with Visual Studio and CMake.
 
 ## Usage
 Two commands are available in Maya when the plugin is loaded: `saveAnimClip` and `loadAnimClip`.
 
 ### Save animation.
-1. Select animated controls (transforms).
+1. Select controls (transforms).
 2. Select range in time line.<br>
   If no range selected then just a pose will be saved.
 3. Run `saveAnimClip -f "c:/clip.json"`<br>
