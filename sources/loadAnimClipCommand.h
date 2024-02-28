@@ -3,6 +3,7 @@
 #include <maya/MSyntax.h>
 #include <maya/MDGModifier.h>
 #include <maya/MAnimCurveChange.h>
+#include <maya/MSelectionList.h>
 
 class LoadAnimClipCommand : public MPxCommand
 {
@@ -20,6 +21,8 @@ public:
 private:
 	MDGModifier m_dgmod;
 	MAnimCurveChange m_animChange;
+	MSelectionList m_objectList;
+	MString m_namespace;
 	
 	MString m_filePath;
 	double m_startFrame;

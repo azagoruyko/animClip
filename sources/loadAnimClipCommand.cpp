@@ -31,29 +31,36 @@ using namespace rapidjson;
 MSyntax LoadAnimClipCommand::newSyntax()
 {
 	MSyntax syntax;
-
+	syntax.addFlag("-ns", "-namespace", MSyntax::MArgType::kString);
 	syntax.addFlag("-f", "-file", MSyntax::MArgType::kString);
 	syntax.addFlag("-sf", "-startFrame", MSyntax::MArgType::kLong);
+	syntax.setObjectType(MSyntax::kSelectionList, 0);
+	syntax.useSelectionAsDefault(true);
 
 	return syntax;
 };
 
 MStatus LoadAnimClipCommand::doIt(const MArgList& args)
 {
-	MArgParser argParser(syntax(), args);
+	MArgDatabase argData(newSyntax(), args);
 
-	if (!argParser.isFlagSet("-f"))
+	if (!argData.isFlagSet("-f"))
 	{
 		MGlobal::displayError("-file(-f) flag must be specified with a file path");
 		return MS::kFailure;
 	}
 
-	argParser.getFlagArgument("-f", 0, m_filePath);
+	if (argData.isFlagSet("-ns"))
+		argData.getFlagArgument("-ns", 0, m_namespace);
 
-	if (argParser.isFlagSet("-sf"))
-		argParser.getFlagArgument("-sf", 0, m_startFrame);
+	argData.getFlagArgument("-f", 0, m_filePath);
+
+	if (argData.isFlagSet("-sf"))
+		argData.getFlagArgument("-sf", 0, m_startFrame);
 	else
 		m_startFrame = DBL_MAX;
+
+	argData.getObjects(m_objectList);
 
 	redoIt();
 	return MS::kSuccess;
@@ -62,11 +69,11 @@ MStatus LoadAnimClipCommand::doIt(const MArgList& args)
 MObject getMObjectByName(const MString& name)
 {
 	MSelectionList selList;
-	if (MGlobal::getSelectionListByName(name, selList) != MS::kSuccess || selList.length() == 0)
-		return MObject();
+	selList.add(name);
 
 	MObject object;
-	selList.getDependNode(0, object);
+	if (selList.length() > 0)
+		selList.getDependNode(0, object);
 	return object;
 }
 
@@ -135,18 +142,33 @@ MStatus LoadAnimClipCommand::redoIt()
 	const double currentFrame = m_startFrame == DBL_MAX ? MAnimControl::currentTime().value() : m_startFrame;
 
 	ifstream ifs(m_filePath.asChar());
+	if (!ifs.good())
+	{
+		MGlobal::displayError("Cannot open file '" + m_filePath + "'");
+		return MS::kFailure;
+	}
 	IStreamWrapper isw(ifs);
 
 	Document doc;
 	doc.ParseStream(isw);
 
-	MSelectionList selList;
-	MGlobal::getActiveSelectionList(selList);
+	if (m_objectList.length() == 0) // use all objects in the clip
+	{
+		for (auto it = doc.MemberBegin(); it != doc.MemberEnd(); it++)
+		{
+			MString nodeName = m_namespace + it->name.GetString();
+			MObject nodeObj = getMObjectByName(nodeName);
+			if (!nodeObj.isNull())
+				m_objectList.add(nodeObj);
+			else
+				MGlobal::displayWarning("Cannot find '" + nodeName + "' in the scene");
+		}
+	}
 
-	for (int i = 0; i < selList.length(); i++)
+	for (int i = 0; i < m_objectList.length(); i++)
 	{
 		MObject nodeObj;
-		selList.getDependNode(i, nodeObj);
+		m_objectList.getDependNode(i, nodeObj);
 
 		MFnDependencyNode nodeFn(nodeObj);
 		string nodeLocalName = getNodeLocalName(nodeFn);
