@@ -33,7 +33,7 @@ find_package_handle_standard_args(Maya DEFAULT_MSG MAYA_DEVKIT_DIR)
 function(MAYA_PLUGIN target)
     target_include_directories(${target} PUBLIC ${MAYA_DEVKIT_DIR}/include)
 
-    set(MAYA_LIBS Foundation OpenMaya OpenMayaAnim OpenMayaFX OpenMayaRender OpenMayaUI clew tbb)
+    set(MAYA_LIBS Foundation OpenMaya OpenMayaAnim OpenMayaFX OpenMayaRender OpenMayaUI clew tbb12)
     foreach(MAYA_LIB ${MAYA_LIBS})
         target_link_libraries(${target} PUBLIC ${MAYA_DEVKIT_DIR}/lib/${MAYA_LIB_PREFIX}${MAYA_LIB}${MAYA_LIB_SUFFIX})
     endforeach()
