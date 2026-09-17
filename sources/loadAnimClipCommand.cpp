@@ -8,6 +8,7 @@
 #include <maya/MAnimControl.h>
 #include <maya/MFnAnimCurve.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MFnNumericAttribute.h>
 #include <maya/MArgDatabase.h>
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
@@ -60,10 +61,14 @@ MStatus LoadAnimClipCommand::doIt(const MArgList& args)
 	else
 		m_startFrame = DBL_MAX;
 
-	argData.getObjects(m_objectList);
+	m_objectList.clear();
+	if (argData.getObjects(m_objectList) != MS::kSuccess)
+	{
+		MGlobal::displayError("Cannot read the selection list");
+		return MS::kFailure;
+	}
 
-	redoIt();
-	return MS::kSuccess;
+	return redoIt();
 }
 
 MObject getMObjectByName(const MString& name)
@@ -75,6 +80,68 @@ MObject getMObjectByName(const MString& name)
 	if (selList.length() > 0)
 		selList.getDependNode(0, object);
 	return object;
+}
+
+double getNumericValue(const Value& value)
+{
+	if (value.IsBool())
+		return value.GetBool() ? 1.0 : 0.0;
+	if (value.IsInt())
+		return static_cast<double>(value.GetInt());
+	if (value.IsUint())
+		return static_cast<double>(value.GetUint());
+	if (value.IsInt64())
+		return static_cast<double>(value.GetInt64());
+	if (value.IsUint64())
+		return static_cast<double>(value.GetUint64());
+	if (value.IsDouble())
+		return value.GetDouble();
+
+	return 0.0;
+}
+
+MStatus setStaticPlugValue(MDGModifier& dgmod, const MPlug& plug, const Value& value)
+{
+	const double number = getNumericValue(value);
+
+	if (plug.attribute().apiType() == MFn::kEnumAttribute)
+		return dgmod.newPlugValueShort(plug, (short)number);
+
+	const MFn::Type attributeType = plug.attribute().apiType();
+	if (attributeType == MFn::kUnitAttribute ||
+		attributeType == MFn::kDoubleAngleAttribute ||
+		attributeType == MFn::kFloatAngleAttribute ||
+		attributeType == MFn::kDoubleLinearAttribute ||
+		attributeType == MFn::kFloatLinearAttribute ||
+		attributeType == MFn::kTimeAttribute)
+		return dgmod.newPlugValueDouble(plug, number);
+
+	if (plug.attribute().apiType() != MFn::kNumericAttribute)
+		return MS::kFailure;
+
+	MStatus status;
+	MFnNumericAttribute numericAttribute(plug.attribute(), &status);
+	if (status != MS::kSuccess)
+		return status;
+
+	switch (numericAttribute.unitType())
+	{
+	case MFnNumericData::kBoolean:
+		return dgmod.newPlugValueBool(plug, number != 0.0);
+	case MFnNumericData::kByte:
+		return dgmod.newPlugValueChar(plug, (char)number);
+	case MFnNumericData::kShort:
+		return dgmod.newPlugValueShort(plug, (short)number);
+	case MFnNumericData::kInt:
+		return dgmod.newPlugValueInt(plug, (int)number);
+	case MFnNumericData::kFloat:
+		return dgmod.newPlugValueFloat(plug, (float)number);
+	case MFnNumericData::kDouble:
+		return dgmod.newPlugValueDouble(plug, number);
+	default:
+		MGlobal::displayError("Unsupported numeric attribute type: "+plug.name());
+		return MS::kFailure;
+	}
 }
 
 void setAnimCurveData(MFnAnimCurve& acFn, const Value& animData, MAnimCurveChange *animChange, double timeOffset = 0)
@@ -151,6 +218,11 @@ MStatus LoadAnimClipCommand::redoIt()
 
 	Document doc;
 	doc.ParseStream(isw);
+	if (doc.HasParseError() || !doc.IsObject())
+	{
+		MGlobal::displayError("Invalid anim clip file '" + m_filePath + "'");
+		return MS::kFailure;
+	}
 
 	if (m_objectList.length() == 0) // use all objects in the clip
 	{
@@ -165,12 +237,22 @@ MStatus LoadAnimClipCommand::redoIt()
 		}
 	}
 
+	MStatus status;
 	for (int i = 0; i < m_objectList.length(); i++)
 	{
 		MObject nodeObj;
-		m_objectList.getDependNode(i, nodeObj);
+		if (m_objectList.getDependNode(i, nodeObj) != MS::kSuccess || nodeObj.isNull())
+		{
+			MGlobal::displayWarning("Skipping selected item that is not a dependency node");
+			continue;
+		}
 
-		MFnDependencyNode nodeFn(nodeObj);
+		MFnDependencyNode nodeFn(nodeObj, &status);
+		if (status != MS::kSuccess)
+		{
+			MGlobal::displayWarning("Cannot access selected node");
+			continue;
+		}
 		string nodeLocalName = getNodeLocalName(nodeFn);
 
 		if (!doc.HasMember(nodeLocalName.c_str()))
@@ -231,7 +313,14 @@ MStatus LoadAnimClipCommand::redoIt()
 				{
 					MFnAnimCurve acFn;
 					MObject ac = acFn.create(nodeObj, destPlug.attribute(), &m_dgmod);
-					m_dgmod.renameNode(ac, MString(node) + "_"+ attrName);
+					if (ac.isNull())
+					{
+						MGlobal::displayWarning("Cannot create animation curve for '" + nodeFn.name() + "." + attrName + "'");
+						continue;
+					}
+					status = m_dgmod.renameNode(ac, MString(node) + "_"+ attrName);
+					if (status != MS::kSuccess)
+						MGlobal::displayWarning("Cannot rename animation curve for '" + nodeFn.name() + "." + attrName + "': " + status.errorString());
 
 					acFn.setPreInfinityType((MFnAnimCurve::InfinityType)data.value["preinf"].GetInt());
 					acFn.setPostInfinityType((MFnAnimCurve::InfinityType)data.value["postinf"].GetInt());
@@ -257,11 +346,21 @@ MStatus LoadAnimClipCommand::redoIt()
 			}
 
 			if (!destPlug.isLocked())
-				m_dgmod.newPlugValueDouble(destPlug, attrData.value.GetDouble());
+			{
+				status = setStaticPlugValue(m_dgmod, destPlug, attrData.value);
+
+				if (status != MS::kSuccess)
+					MGlobal::displayWarning("Cannot set '" + nodeFn.name() + "." + attrName + "': " + status.errorString());
+			}
 		}
 	}
 
-	m_dgmod.doIt();
+	status = m_dgmod.doIt();
+	if (status != MS::kSuccess)
+	{
+		MGlobal::displayError("Failed to apply animation changes: " + status.errorString());
+		return MS::kFailure;
+	}
 	m_animChange.redoIt();
 
 	MGlobal::displayInfo("Import anim clip from '" + m_filePath + "'");

@@ -7,6 +7,7 @@
 #include <maya/MAnimUtil.h>
 #include <maya/MFnAnimCurve.h>
 #include <maya/MFnDependencyNode.h>
+#include <maya/MFnNumericAttribute.h>
 #include <maya/MArgDatabase.h>
 #include <maya/MArgList.h>
 #include <maya/MArgParser.h>
@@ -26,6 +27,60 @@
 
 using namespace std;
 using namespace rapidjson;
+
+bool getPlugValue(const MPlug& plug, Value& value)
+{
+	const MFn::Type attributeType = plug.attribute().apiType();
+
+	if (attributeType == MFn::kEnumAttribute)
+	{
+		value.SetInt(static_cast<int>(plug.asShort()));
+		return true;
+	}
+
+	if (attributeType == MFn::kUnitAttribute ||
+		attributeType == MFn::kDoubleAngleAttribute ||
+		attributeType == MFn::kFloatAngleAttribute ||
+		attributeType == MFn::kDoubleLinearAttribute ||
+		attributeType == MFn::kFloatLinearAttribute ||
+		attributeType == MFn::kTimeAttribute)
+	{
+		value.SetDouble(plug.asDouble());
+		return true;
+	}
+
+	if (attributeType != MFn::kNumericAttribute)
+		return false;
+
+	MStatus status;
+	MFnNumericAttribute numericAttribute(plug.attribute(), &status);
+	if (status != MS::kSuccess)
+		return false;
+
+	switch (numericAttribute.unitType())
+	{
+	case MFnNumericData::kBoolean:
+		value.SetBool(plug.asBool());
+		return true;
+	case MFnNumericData::kByte:
+		value.SetInt(static_cast<int>(plug.asChar()));
+		return true;
+	case MFnNumericData::kShort:
+		value.SetInt(static_cast<int>(plug.asShort()));
+		return true;
+	case MFnNumericData::kInt:
+		value.SetInt(plug.asInt());
+		return true;
+	case MFnNumericData::kFloat:
+		value.SetFloat(plug.asFloat());
+		return true;
+	case MFnNumericData::kDouble:
+		value.SetDouble(plug.asDouble());
+		return true;
+	default:
+		return false;
+	}
+}
 
 MSyntax SaveAnimClipCommand::newSyntax()
 {
@@ -175,7 +230,6 @@ MStatus SaveAnimClipCommand::redoIt()
 			const string nodeName = getNodeLocalName(nodeFn);
 			const char *node = nodeName.c_str();
 
-
 			if (!doc.HasMember(node))
 			{
 				doc.AddMember(Value(node, doc.GetAllocator()).Move(), Value(kObjectType), doc.GetAllocator());
@@ -188,14 +242,28 @@ MStatus SaveAnimClipCommand::redoIt()
 			for (int k = 0; k < nodeFn.attributeCount(); k++)
 			{
 				const MPlug plug(nodeObj, nodeFn.attribute(k));
-				if (plug.isKeyable())
-					doc[node]["static"].AddMember(Value(plug.partialName().asChar(), doc.GetAllocator()).Move(), Value(plug.asDouble()), doc.GetAllocator());
+				if (plug.isKeyable() && !plug.isCompound() && plug.partialName() != "ro")
+				{
+					Value value;
+					if (getPlugValue(plug, value))
+						doc[node]["static"].AddMember(
+							Value(plug.partialName().asChar(), doc.GetAllocator()).Move(),
+							value,
+							doc.GetAllocator());
+				}
 			}
 
 			// save rotateOrder for each selected node
-			const MPlug p = nodeFn.findPlug("ro", true);
-			if (!p.isNull())
-				doc[node]["static"].AddMember(Value("ro", doc.GetAllocator()).Move(), Value(p.asShort()), doc.GetAllocator());
+			if (!doc[node]["static"].HasMember("ro"))
+			{
+				const MPlug p = nodeFn.findPlug("ro", true);
+				if (!p.isNull())
+				{
+					Value value;
+					if (getPlugValue(p, value))
+						doc[node]["static"].AddMember(Value("ro", doc.GetAllocator()).Move(), value, doc.GetAllocator());
+				}
+			}
 		}
 
 		MGlobal::displayInfo("Export pose clip to '" + m_filePath + "'");
@@ -234,7 +302,7 @@ MStatus SaveAnimClipCommand::redoIt()
 				{
 					const MPlug p = nodeFn.findPlug("ro", true);
 					if (!p.isNull())
-						doc[node]["static"].AddMember(Value("ro", doc.GetAllocator()).Move(), Value(p.asShort()), doc.GetAllocator());
+					doc[node]["static"].AddMember(Value("ro", doc.GetAllocator()).Move(), Value(static_cast<int>(p.asShort())), doc.GetAllocator());
 				}
 
 				doc[node]["animation"].AddMember(Value(attr, doc.GetAllocator()).Move(), Value(kObjectType), doc.GetAllocator());
